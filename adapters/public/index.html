@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>AI Agent Workbench</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { --bg:#0f172a; --card:#111827; --muted:#334155; --text:#e5e7eb; --accent:#22c55e; --warn:#f59e0b; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif; background:var(--bg); color:var(--text); }
+    .layout { display:grid; grid-template-columns: 280px 1fr; min-height:100vh; }
+    .left { border-right:1px solid #1f2937; padding:16px; background:#0b1220; }
+    .left h2 { margin:0 0 12px; font-size:16px; color:#a5b4fc; letter-spacing:.5px; }
+    .task { width:100%; text-align:left; padding:10px 12px; margin:6px 0; border:1px solid #1f2937; background:#0c1425; color:#cbd5e1; border-radius:8px; cursor:pointer; }
+    .task.active { border-color:var(--accent); color:#ecfeff; }
+    .right { padding:18px; }
+    .card { background:var(--card); border:1px solid #1f2937; border-radius:12px; padding:16px; margin-bottom:16px; }
+    .row { display:flex; gap:8px; align-items:center; }
+    button, .btn { background:#0ea5e9; color:white; border:none; border-radius:8px; padding:10px 14px; cursor:pointer; }
+    button.secondary { background:#1f2937; color:#e5e7eb; }
+    input, textarea { width:100%; background:#0b1220; color:#e5e7eb; border:1px solid #1f2937; border-radius:8px; padding:10px; }
+    .muted { color:#94a3b8; font-size:13px; }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; border:1px solid #374151; background:#0b1220; color:#cbd5e1; }
+    .ok { color:#86efac; } .err { color:#fda4af; }
+    pre { white-space:pre-wrap; word-wrap:break-word; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="left">
+      <h2>Tasks</h2>
+      <button class="task" data-task="chat">💬 General Chat</button>
+      <button class="task" data-task="jobs">🗂️ Job Application Tracker</button>
+      <button class="task" data-task="subs">📬 Subscription Tracker</button>
+      <button class="task" data-task="news">📰 Daily AI News Summary</button>
+      <div style="margin-top:16px;">
+        <div class="muted">Adapter: <span id="whoami" class="pill">checking…</span></div>
+        <div class="muted">Health: <span id="health" class="pill">checking…</span></div>
+      </div>
+    </aside>
+
+    <main class="right">
+      <!-- Chat -->
+      <section id="panel-chat" class="card" hidden>
+        <h3>💬 General Chat</h3>
+        <div class="row">
+          <input id="chat-input" placeholder="Ask me anything…" />
+          <button id="chat-send">Send</button>
+        </div>
+        <div class="muted" style="margin-top:8px;">Tip: try “What is the date today?”</div>
+        <div id="chat-output" class="card" style="margin-top:12px;"></div>
+      </section>
+
+      <!-- Jobs -->
+      <section id="panel-jobs" class="card" hidden>
+        <h3>🗂️ Job Application Tracker</h3>
+        <p class="muted">Import job alerts from Gmail and download a CSV.</p>
+        <div class="row" style="margin-top:8px;">
+          <button id="jobs-import">Import from Gmail</button>
+          <span id="jobs-status" class="muted"></span>
+        </div>
+        <div id="jobs-log" class="muted" style="margin-top:12px;"></div>
+      </section>
+
+      <!-- Subs (placeholder) -->
+      <section id="panel-subs" class="card" hidden>
+        <h3>📬 Subscription Tracker</h3>
+        <p class="muted">Coming next: import subscriptions via scanner and export CSV.</p>
+      </section>
+
+      <!-- News (placeholder) -->
+      <section id="panel-news" class="card" hidden>
+        <h3>📰 Daily AI News Summary</h3>
+        <p class="muted">Run the local digest to generate and email today’s summary.</p>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const qs = sel => document.querySelector(sel);
+    const qsa = sel => Array.from(document.querySelectorAll(sel));
+
+    const panels = {
+      chat: qs('#panel-chat'),
+      jobs: qs('#panel-jobs'),
+      subs: qs('#panel-subs'),
+      news: qs('#panel-news'),
+    };
+
+    let currentTask = "chat";
+
+    function setTask(task) {
+      currentTask = task;
+      qsa('.task').forEach(b => b.classList.toggle('active', b.dataset.task === task));
+      Object.entries(panels).forEach(([k, el]) => el.hidden = (k !== task));
+      console.log("[UI] switched task →", task);
+    }
+
+    // left menu
+    qsa('.task').forEach(btn => btn.addEventListener('click', () => setTask(btn.dataset.task)));
+
+    // boot: default to chat
+    setTask('chat');
+
+    // whoami + health
+    (async () => {
+      try {
+        const who = await fetch('/whoami').then(r => r.json()).catch(() => null);
+        qs('#whoami').textContent = who?.name ?? 'unknown';
+      } catch {}
+      try {
+        const h = await fetch('/readyz').then(r => r.json()).catch(() => null);
+        qs('#health').textContent = h?.ok ? 'ready' : 'not ready';
+        qs('#health').classList.toggle('ok', !!h?.ok);
+      } catch {}
+    })();
+
+    // ---- CHAT ----
+    qs('#chat-send').addEventListener('click', async () => {
+      const prompt = qs('#chat-input').value.trim();
+      if (!prompt) return;
+      qs('#chat-output').textContent = "…thinking";
+      try {
+        const resp = await fetch('/chat', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ prompt, task:'chat', sid:'ui' })
+        });
+        const data = await resp.json();
+        qs('#chat-output').textContent = (data?.answer ?? '').toString();
+      } catch (e) {
+        console.error(e);
+        qs('#chat-output').textContent = 'Error. See console.';
+      }
+    });
+
+    // ---- JOBS IMPORT → CSV DOWNLOAD ----
+    qs('#jobs-import').addEventListener('click', async () => {
+      if (currentTask !== 'jobs') setTask('jobs');
+      const status = qs('#jobs-status');
+      const log = qs('#jobs-log');
+      status.textContent = 'Importing…';
+      log.textContent = '';
+
+      try {
+        const resp = await fetch('/api/jobs/import_csv', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ daysBack: 7 })
+        });
+
+        if (!resp.ok) {
+          const text = await resp.text();
+          status.textContent = '';
+          log.innerHTML = `<span class="err">Import failed:</span> ${text}`;
+          console.error('Import failed', resp.status, text);
+          return;
+        }
+
+        // Create a download from response body
+        const blob = await resp.blob();
+        const cd = resp.headers.get('Content-Disposition') || '';
+        const m = /filename="([^"]+)"/i.exec(cd);
+        const name = m ? m[1] : 'jobs.csv';
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+
+        status.textContent = 'Imported ✓';
+        status.classList.add('ok');
+        log.innerHTML = `CSV downloaded (<code>${name}</code>). A copy also saves to <code>exports/</code>.`;
+      } catch (e) {
+        status.textContent = '';
+        log.innerHTML = `<span class="err">Error:</span> ${e?.message || e}`;
+        console.error(e);
+      }
+    });
+
+    // Allow Enter to send chat
+    qs('#chat-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') qs('#chat-send').click();
+    });
+  </script>
+</body>
+</html>
