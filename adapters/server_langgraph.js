@@ -28,6 +28,17 @@ import { StateGraph, START, END } from "@langchain/langgraph";
 import { taskSystemMessage } from "./core/instructions.js";
 import { toolsJobs, toolsSubs, toolsWeather, toolsSentiment, toolsResume } from "./core/tools.js";
 import { writeResume } from "./core/storage.js";
+import { getUserMemory, addToHistory, getMemorySummary, updatePreference } from "./core/memory.js";
+import { initializeRAG, addResumeToRAG, addJobToRAG } from "./core/rag.js";
+import { createCallbacks } from "./core/callbacks.js";
+import { createMultiAgentTeam } from "./core/multiAgent.js";
+import { toolsFinancial } from "./core/financial.js";
+import { toolsResearch } from "./core/research.js";
+import { toolsMeeting } from "./core/meeting.js";
+import { toolsTravelEnhanced } from "./core/travel.js";
+import { toolsSocial } from "./core/social.js";
+import { toolsHealth } from "./core/health.js";
+import { toolsGitHubMCP, toolsBrowserMCP, toolsNotionMCP } from "./core/mcp.js";
 
 if (!process.env.OPENAI_API_KEY) {
   throw new Error("Missing OPENAI_API_KEY");
@@ -69,8 +80,26 @@ const sessions = new Map();
 
 const ChatSchema = z.object({
   prompt: z.string().min(1),
-  task: z.enum(["chat", "jobs", "subs", "weather", "sentiment", "resume", "news"]).default("chat"),
+  task: z
+    .enum([
+      "chat",
+      "jobs",
+      "subs",
+      "weather",
+      "sentiment",
+      "resume",
+      "news",
+      "financial",
+      "research",
+      "meeting",
+      "travel",
+      "social",
+      "health",
+      "multi-agent",
+    ])
+    .default("chat"),
   sid: z.string().min(3).default("default"),
+  stream: z.boolean().default(false),
 });
 const RespSchema = z.object({
   answer: z.string(),
@@ -157,15 +186,30 @@ async function runNewsDigestExec({ email, python } = {}) {
 }
 
 // ---- graph ---------------------------------------------------------------
-function makeGraph(task, sid) {
+function makeGraph(task, sid, callbacks) {
+  const getContext = () => ({ sid });
+
+  // Core tools
   const { addJob, listJobs, updateJob, importJobsFromGmail } = toolsJobs(langgraphToolFactory);
   const { addSubscription, listSubscriptions, updateSubscription, importSubscriptionsFromGmail } =
     toolsSubs(langgraphToolFactory);
   const { getWeather } = toolsWeather(langgraphToolFactory);
   const { analyzeSentiment } = toolsSentiment(langgraphToolFactory);
-  const { resumeStatus, resumeAsk, resumeImprove } = toolsResume(langgraphToolFactory, () => ({
-    sid,
-  }));
+  const { resumeStatus, resumeAsk, resumeImprove } = toolsResume(langgraphToolFactory, getContext);
+
+  // Enhanced tools
+  const financialTools = toolsFinancial(langgraphToolFactory, getContext);
+  const researchTools = toolsResearch(langgraphToolFactory);
+  const meetingTools = toolsMeeting(langgraphToolFactory, getContext);
+  const travelTools = toolsTravelEnhanced(langgraphToolFactory);
+  const socialTools = toolsSocial(langgraphToolFactory);
+  const healthTools = toolsHealth(langgraphToolFactory, getContext);
+  const githubTools = toolsGitHubMCP(langgraphToolFactory);
+  const browserTools = toolsBrowserMCP(langgraphToolFactory);
+  const notionTools = toolsNotionMCP(langgraphToolFactory);
+
+  // Multi-agent team (for job search)
+  const multiAgentTools = createMultiAgentTeam(langgraphToolFactory, getContext);
 
   const runNewsDigest = new DynamicStructuredTool({
     name: "runNewsDigest",
@@ -175,11 +219,28 @@ function makeGraph(task, sid) {
       email: z.string().email().optional(),
       python: z.string().optional().describe('Python exe: "python" (default) or "py"'),
     }),
-    func: async ({ email, python }) => runNewsDigestExec({ email, python }),
+    func: async ({ email, python }) => {
+      if (callbacks) {
+        callbacks.onToolStart("runNewsDigest", { email, python });
+      }
+      try {
+        const result = await runNewsDigestExec({ email, python });
+        if (callbacks) {
+          callbacks.onToolEnd("runNewsDigest", result);
+        }
+        return result;
+      } catch (error) {
+        if (callbacks) {
+          callbacks.onError(error, "runNewsDigest");
+        }
+        throw error;
+      }
+    },
   });
 
-  const llm = new ChatOpenAI({ model: "gpt-4o-mini", temperature: 0 });
-  const llmWithTools = llm.bindTools([
+  // Collect all tools
+  const allTools = [
+    // Core
     addJob,
     listJobs,
     updateJob,
@@ -194,15 +255,62 @@ function makeGraph(task, sid) {
     resumeAsk,
     resumeImprove,
     runNewsDigest,
-  ]);
+    // Financial
+    financialTools.analyzeSubscriptions,
+    financialTools.optimizeSubscriptions,
+    financialTools.trackROI,
+    // Research
+    researchTools.researchCompany,
+    researchTools.researchRole,
+    researchTools.researchIndustry,
+    researchTools.analyzeJobPosting,
+    // Meeting
+    meetingTools.summarizeMeeting,
+    meetingTools.extractInterviewInsights,
+    meetingTools.createFollowUp,
+    // Travel
+    travelTools.planTrip,
+    travelTools.findFlights,
+    travelTools.findHotels,
+    travelTools.getTravelRecommendations,
+    // Social
+    socialTools.monitorLinkedIn,
+    socialTools.monitorTwitter,
+    socialTools.trackCompanyUpdates,
+    socialTools.analyzeJobMarketTrends,
+    // Health
+    healthTools.trackWorkLifeBalance,
+    healthTools.suggestBreaks,
+    healthTools.trackProductivity,
+    // MCP
+    githubTools.searchRepositories,
+    githubTools.getRepositoryInfo,
+    githubTools.getIssues,
+    browserTools.scrapeWebPage,
+    browserTools.searchWeb,
+    notionTools.createNotionPage,
+    notionTools.searchNotion,
+    // Multi-agent
+    ...Object.values(multiAgentTools),
+  ];
+
+  const llm = new ChatOpenAI({ model: "gpt-4o-mini", temperature: 0 });
+  const llmWithTools = llm.bindTools(allTools);
 
   const graph = new StateGraph({
     channels: { messages: { default: () => [], value: (p, n) => p.concat(n) } },
   });
 
-  graph.addNode("model", async (state) => ({
-    messages: [await llmWithTools.invoke(state.messages)],
-  }));
+  graph.addNode("model", async (state) => {
+    if (callbacks) {
+      callbacks.onLLMStart(JSON.stringify(state.messages));
+    }
+    const result = await llmWithTools.invoke(state.messages);
+    if (callbacks) {
+      callbacks.onLLMEnd(result.content);
+    }
+    return { messages: [result] };
+  });
 
   graph.addNode("tool", async (state) => {
     const last = state.messages[state.messages.length - 1];
@@ -212,6 +320,7 @@ function makeGraph(task, sid) {
     }
 
     const catalog = {
+      // Core
       addJob,
       listJobs,
       updateJob,
@@ -226,19 +335,93 @@ function makeGraph(task, sid) {
       resumeAsk,
       resumeImprove,
       runNewsDigest,
+      // Financial
+      analyzeSubscriptions: financialTools.analyzeSubscriptions,
+      optimizeSubscriptions: financialTools.optimizeSubscriptions,
+      trackROI: financialTools.trackROI,
+      // Research
+      researchCompany: researchTools.researchCompany,
+      researchRole: researchTools.researchRole,
+      researchIndustry: researchTools.researchIndustry,
+      analyzeJobPosting: researchTools.analyzeJobPosting,
+      // Meeting
+      summarizeMeeting: meetingTools.summarizeMeeting,
+      extractInterviewInsights: meetingTools.extractInterviewInsights,
+      createFollowUp: meetingTools.createFollowUp,
+      // Travel
+      planTrip: travelTools.planTrip,
+      findFlights: travelTools.findFlights,
+      findHotels: travelTools.findHotels,
+      getTravelRecommendations: travelTools.getTravelRecommendations,
+      // Social
+      monitorLinkedIn: socialTools.monitorLinkedIn,
+      monitorTwitter: socialTools.monitorTwitter,
+      trackCompanyUpdates: socialTools.trackCompanyUpdates,
+      analyzeJobMarketTrends: socialTools.analyzeJobMarketTrends,
+      // Health
+      trackWorkLifeBalance: healthTools.trackWorkLifeBalance,
+      suggestBreaks: healthTools.suggestBreaks,
+      trackProductivity: healthTools.trackProductivity,
+      // MCP
+      searchRepositories: githubTools.searchRepositories,
+      getRepositoryInfo: githubTools.getRepositoryInfo,
+      getIssues: githubTools.getIssues,
+      scrapeWebPage: browserTools.scrapeWebPage,
+      searchWeb: browserTools.searchWeb,
+      createNotionPage: notionTools.createNotionPage,
+      searchNotion: notionTools.searchNotion,
+      // Multi-agent
+      ...multiAgentTools,
     };
 
     const t = catalog[tc.name];
-    const result = t ? await t.invoke(tc.args || {}) : { error: `Unknown tool ${tc.name}` };
-    return {
-      messages: [
-        new ToolMessage({
-          tool_call_id: tc.id,
-          name: tc.name,
-          content: JSON.stringify(result),
-        }),
-      ],
-    };
+    if (!t) {
+      const error = { error: `Unknown tool ${tc.name}` };
+      if (callbacks) {
+        callbacks.onError(new Error(`Unknown tool: ${tc.name}`), "tool");
+      }
+      return {
+        messages: [
+          new ToolMessage({
+            tool_call_id: tc.id,
+            name: tc.name,
+            content: JSON.stringify(error),
+          }),
+        ],
+      };
+    }
+
+    if (callbacks) {
+      callbacks.onToolStart(tc.name, tc.args);
+    }
+    try {
+      const result = await t.invoke(tc.args || {});
+      if (callbacks) {
+        callbacks.onToolEnd(tc.name, result);
+      }
+      return {
+        messages: [
+          new ToolMessage({
+            tool_call_id: tc.id,
+            name: tc.name,
+            content: JSON.stringify(result),
+          }),
+        ],
+      };
+    } catch (error) {
+      if (callbacks) {
+        callbacks.onError(error, tc.name);
+      }
+      return {
+        messages: [
+          new ToolMessage({
+            tool_call_id: tc.id,
+            name: tc.name,
+            content: JSON.stringify({ error: error.message }),
+          }),
+        ],
+      };
+    }
   });
 
   graph.addConditionalEdges(
@@ -257,40 +440,92 @@ function makeGraph(task, sid) {
 
 // ---- routes ---------------------------------------------------------------
 
-// UPDATED: fast path for plain chat
+// Enhanced chat with memory, streaming, and callbacks
 app.post("/chat", async (req, res, next) => {
   try {
-    const { prompt, task = "chat", sid = "default" } = req.body || {};
+    const { prompt, task = "chat", sid = "default", stream = false } = req.body || {};
+    const parsed = ChatSchema.parse({ prompt, task, sid, stream });
+
+    // Initialize callbacks for tracking
+    const callbacks = createCallbacks(parsed.sid);
+
+    // Load user memory
+    const memory = await getUserMemory(parsed.sid);
+    const memorySummary = await getMemorySummary(parsed.sid);
+
+    // Add memory context to system message
+    const memoryContext = memorySummary.recentFacts.length > 0
+      ? `\nUser context: ${memorySummary.recentFacts.slice(-3).map((f) => f.fact).join("; ")}`
+      : "";
 
     // Fast path: simple chat → call the model directly
-    if (task === "chat") {
+    if (task === "chat" && !stream) {
       const llm = new ChatOpenAI({ model: "gpt-4o-mini", temperature: 0 });
+      const systemMessage = `You are a helpful assistant. Answer clearly and concisely.${memoryContext}`;
       const r = await llm.invoke([
-        { role: "system", content: "You are a helpful assistant. Answer clearly and concisely." },
+        { role: "system", content: systemMessage },
+        ...memory.conversationHistory.slice(-10),
         { role: "user", content: prompt || "" },
       ]);
       const text = typeof r?.content === "string" ? r.content : String(r?.content ?? "");
-      // keep minimal session history
-      const prior = sessions.get(sid) || [];
-      sessions.set(
-        sid,
-        [
-          ...prior,
-          { role: "user", content: prompt || "" },
-          { role: "assistant", content: text },
-        ].slice(-10)
-      );
-      return res.json({ answer: text, next_action: "none", data: {} });
+
+      // Save to memory
+      await addToHistory(parsed.sid, "user", prompt || "");
+      await addToHistory(parsed.sid, "assistant", text);
+
+      return res.json({
+        answer: text,
+        next_action: "none",
+        data: {},
+        memory: memorySummary,
+      });
+    }
+
+    // Streaming path
+    if (stream) {
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+
+      const llm = new ChatOpenAI({
+        model: "gpt-4o-mini",
+        temperature: 0,
+        streaming: true,
+      });
+
+      const systemMessage = `${taskSystemMessage(parsed.task)}${memoryContext}`;
+      const stream = await llm.stream([
+        { role: "system", content: systemMessage },
+        ...memory.conversationHistory.slice(-10),
+        { role: "user", content: parsed.prompt },
+      ]);
+
+      let fullResponse = "";
+      for await (const chunk of stream) {
+        const content = chunk.content || "";
+        fullResponse += content;
+        res.write(`data: ${JSON.stringify({ chunk: content })}\n\n`);
+      }
+
+      await addToHistory(parsed.sid, "user", parsed.prompt);
+      await addToHistory(parsed.sid, "assistant", fullResponse);
+
+      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+      res.end();
+      return;
     }
 
     // Original LangGraph path for tool-driven tasks
-    const parsed = ChatSchema.parse({ prompt, task, sid });
-    const prior = sessions.get(parsed.sid) || [];
-    const appGraph = makeGraph(parsed.task, parsed.sid);
+    const prior = memory.conversationHistory.slice(-10).map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
+
+    const appGraph = makeGraph(parsed.task, parsed.sid, callbacks);
 
     const result = await appGraph.invoke({
       messages: [
-        { role: "system", content: taskSystemMessage(parsed.task) },
+        { role: "system", content: taskSystemMessage(parsed.task) + memoryContext },
         ...prior,
         { role: "user", content: parsed.prompt },
       ],
@@ -309,14 +544,18 @@ app.post("/chat", async (req, res, next) => {
       payload = { answer: text, next_action: "none", data: {} };
     }
 
-    const updated = [
-      ...prior,
-      { role: "user", content: parsed.prompt },
-      { role: "assistant", content: payload.answer },
-    ].slice(-10);
-    sessions.set(parsed.sid, updated);
+    // Save to memory
+    await addToHistory(parsed.sid, "user", parsed.prompt);
+    await addToHistory(parsed.sid, "assistant", payload.answer);
 
-    res.json(payload);
+    res.json({
+      ...payload,
+      memory: memorySummary,
+      callbacks: {
+        toolUsage: callbacks.getToolUsage(),
+        events: callbacks.getEvents().slice(-10),
+      },
+    });
   } catch (e) {
     next(e);
   }
@@ -338,7 +577,13 @@ app.post("/upload", upload.single("file"), async (req, res, next) => {
     const data = await pdf(req.file.buffer);
     const text = (data.text || "").trim();
     await writeResume(sid, text);
-    res.json({ ok: true, chars: text.length });
+    // Add to RAG
+    try {
+      await addResumeToRAG(sid, text);
+    } catch (error) {
+      logger.warn({ err: error }, "Failed to add resume to RAG");
+    }
+    res.json({ ok: true, chars: text.length, ragIndexed: true });
   } catch (e) {
     next(e);
   }
@@ -416,6 +661,31 @@ if (process.env.NEWS_CRON_ENABLED === "1") {
     { timezone: "America/Toronto" }
   );
 }
+
+// Initialize RAG on startup
+initializeRAG().catch((err) => {
+  logger.warn({ err }, "RAG initialization failed - continuing without RAG");
+});
+
+// Memory API endpoints
+app.get("/api/memory/:sid", async (req, res) => {
+  try {
+    const summary = await getMemorySummary(req.params.sid);
+    res.json(summary);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/memory/:sid/preference", async (req, res) => {
+  try {
+    const { key, value } = req.body;
+    await updatePreference(req.params.sid, key, value);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 const port = Number(process.env.PORT || 3000);
 app.listen(port, () => logger.info(`LangGraph adapter: http://localhost:${port}`));

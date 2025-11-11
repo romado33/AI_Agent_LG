@@ -18,7 +18,12 @@
     "@langchain/core": "^0.2.36",
     "@langchain/langgraph": "^0.1.5",
     "@langchain/openai": "^0.2.6",
+    "@langchain/community": "^0.2.20",
+    "@langchain/cohere": "^0.1.0",
+    "@langchain/google-genai": "^0.1.0",
+    "@langchain/textsplitters": "^0.0.3",
     "@openai/agents": "^0.1.11",
+    "chromadb": "^1.8.1",
     "compression": "^1.8.1",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
@@ -30,7 +35,10 @@
     "pdf-parse": "^2.4.5",
     "pino": "^10.1.0",
     "pino-http": "^11.0.0",
-    "zod": "^3.25.76"
+    "zod": "^3.25.76",
+    "cheerio": "^1.0.0",
+    "axios": "^1.6.0",
+    "openai": "^4.28.0"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",
