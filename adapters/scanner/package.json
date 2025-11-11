@@ -5,7 +5,11 @@
   "main": "scanner.js",
   "scripts": {
     "dev": "nodemon scanner.js",
-    "start": "node scanner.js"
+    "start": "node scanner.js",
+    "lint": "eslint . --ext .js",
+    "lint:fix": "eslint . --ext .js --fix",
+    "format": "prettier --write \"**/*.js\"",
+    "format:check": "prettier --check \"**/*.js\""
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -15,6 +19,8 @@
     "imapflow": "^1.1.1"
   },
   "devDependencies": {
-    "nodemon": "^3.1.10"
+    "nodemon": "^3.1.10",
+    "eslint": "^8.57.0",
+    "prettier": "^3.2.5"
   }
 }

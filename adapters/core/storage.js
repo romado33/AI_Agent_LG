@@ -11,22 +11,43 @@ const resumesDir = path.join(dataDir, "resumes");
 export async function ensureStore() {
   await fs.mkdir(dataDir, { recursive: true });
   await fs.mkdir(resumesDir, { recursive: true });
-  try { await fs.access(jobsFile); } catch { await fs.writeFile(jobsFile, "[]", "utf8"); }
-  try { await fs.access(subsFile); } catch { await fs.writeFile(subsFile, "[]", "utf8"); }
+  try {
+    await fs.access(jobsFile);
+  } catch {
+    await fs.writeFile(jobsFile, "[]", "utf8");
+  }
+  try {
+    await fs.access(subsFile);
+  } catch {
+    await fs.writeFile(subsFile, "[]", "utf8");
+  }
 }
 
 export async function readJson(kind) {
   await ensureStore();
   const file = kind === "jobs" ? jobsFile : subsFile;
-  return JSON.parse(await fs.readFile(file, "utf8"));
+  try {
+    const content = await fs.readFile(file, "utf8");
+    return JSON.parse(content);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return [];
+    }
+    throw new Error(`Failed to read ${kind} data: ${error.message}`);
+  }
 }
+
 export async function writeJson(kind, rows) {
   await ensureStore();
   const file = kind === "jobs" ? jobsFile : subsFile;
-  await fs.writeFile(file, JSON.stringify(rows, null, 2), "utf8");
+  try {
+    await fs.writeFile(file, JSON.stringify(rows, null, 2), "utf8");
+  } catch (error) {
+    throw new Error(`Failed to write ${kind} data: ${error.message}`);
+  }
 }
 export function newId(prefix) {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
 // Résumé helpers
@@ -35,6 +56,9 @@ export async function writeResume(sid, text) {
   await fs.writeFile(path.join(resumesDir, `${sid}.txt`), text || "", "utf8");
 }
 export async function readResume(sid) {
-  try { return await fs.readFile(path.join(resumesDir, `${sid}.txt`), "utf8"); }
-  catch { return ""; }
+  try {
+    return await fs.readFile(path.join(resumesDir, `${sid}.txt`), "utf8");
+  } catch {
+    return "";
+  }
 }

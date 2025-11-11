@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 from typing import List, Dict, Any, Tuple, Optional
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from pathlib import Path
 
 from bs4 import BeautifulSoup
 import html2text
@@ -49,21 +50,26 @@ SOURCE_RULES = [
 
 OUT_DIR = "ai_digest_output"
 TZ = ZoneInfo("America/Toronto")
+BASE_DIR = Path(__file__).resolve().parent
+CONFIG_DIR = Path(os.getenv("NEWS_CONFIG_DIR") or BASE_DIR)
+TOKEN_PATH = Path(os.getenv("NEWS_TOKEN_PATH") or CONFIG_DIR / "token.json")
+CREDS_PATH = Path(os.getenv("NEWS_CREDENTIALS_PATH") or CONFIG_DIR / "credentials.json")
 
 # -------------------- Gmail auth --------------------
 def gmail_service():
     creds = None
-    if os.path.exists("token.json"):
-        creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+    if TOKEN_PATH.exists():
+        creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            if not os.path.exists("credentials.json"):
-                sys.exit("Missing credentials.json")
-            flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
+            if not CREDS_PATH.exists():
+                sys.exit(f"Missing credentials file at {CREDS_PATH}")
+            flow = InstalledAppFlow.from_client_secrets_file(str(CREDS_PATH), SCOPES)
             creds = flow.run_local_server(port=0)
-        with open("token.json", "w", encoding="utf-8") as token:
+        TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(TOKEN_PATH, "w", encoding="utf-8") as token:
             token.write(creds.to_json())
     return build("gmail","v1",credentials=creds)
 

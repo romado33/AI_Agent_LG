@@ -20,15 +20,26 @@ async function handleScan(res, opts) {
       status: 'ok',
       mode: 'mock',
       items: [
-        { source: 'TLDR AI', subject: 'AI Daily — Mock A', date: new Date().toISOString(), link: 'https://example.com/a' },
-        { source: 'Neuron', subject: 'AI Digest — Mock B', date: new Date().toISOString(), link: 'https://example.com/b' }
-      ]
+        {
+          source: 'TLDR AI',
+          subject: 'AI Daily — Mock A',
+          date: new Date().toISOString(),
+          link: 'https://example.com/a',
+        },
+        {
+          source: 'Neuron',
+          subject: 'AI Digest — Mock B',
+          date: new Date().toISOString(),
+          link: 'https://example.com/b',
+        },
+      ],
     });
   }
   try {
     const items = await scanMailbox(opts);
     res.json({ status: 'ok', mode: 'live', items });
   } catch (err) {
+    // eslint-disable-next-line no-console
     console.error('scan error:', err);
     res.status(500).json({ status: 'error', error: String(err?.message || err) });
   }
@@ -42,9 +53,9 @@ app.post('/scan_jobs', async (req, res) => {
       'jobs-noreply@indeed.com',
       'workablemail.com',
       'lever.co',
-      'greenhouse.io'
+      'greenhouse.io',
     ],
-    subjectIncludes: ['job alert', 'new role', 'position', 'opening']
+    subjectIncludes: ['job alert', 'new role', 'position', 'opening'],
   });
 });
 
@@ -55,9 +66,9 @@ app.post('/scan_subscriptions', async (req, res) => {
       'newsletter@tldr.tech',
       'news@theneurondaily.com',
       'ben@bensbites.co',
-      'hello@latentspace.dev'
+      'hello@latentspace.dev',
     ],
-    subjectIncludes: ['ai', 'daily', 'digest', 'newsletter', 'roundup']
+    subjectIncludes: ['ai', 'daily', 'digest', 'newsletter', 'roundup'],
   });
 });
 
@@ -68,13 +79,14 @@ app.post('/scan_news', async (req, res) => {
       'newsletter@tldr.tech',
       'news@theneurondaily.com',
       'ben@bensbites.co',
-      'hello@latentspace.dev'
+      'hello@latentspace.dev',
     ],
     subjectIncludes: ['ai', 'daily', 'digest', 'newsletter'],
-    headlinesOnly: true
+    headlinesOnly: true,
   });
 });
 
 app.listen(PORT, () => {
+  // eslint-disable-next-line no-console
   console.log(`Scanner listening on http://127.0.0.1:${PORT}`);
 });

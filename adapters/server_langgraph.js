@@ -17,7 +17,6 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
-import fsSync from "node:fs";
 import cron from "node-cron";
 import http from "node:http";
 
@@ -27,16 +26,12 @@ import { ToolMessage } from "@langchain/core/messages";
 import { StateGraph, START, END } from "@langchain/langgraph";
 
 import { taskSystemMessage } from "./core/instructions.js";
-import {
-  toolsJobs,
-  toolsSubs,
-  toolsWeather,
-  toolsSentiment,
-  toolsResume,
-} from "./core/tools.js";
+import { toolsJobs, toolsSubs, toolsWeather, toolsSentiment, toolsResume } from "./core/tools.js";
 import { writeResume } from "./core/storage.js";
 
-if (!process.env.OPENAI_API_KEY) throw new Error("Missing OPENAI_API_KEY");
+if (!process.env.OPENAI_API_KEY) {
+  throw new Error("Missing OPENAI_API_KEY");
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const logger = pino({ level: process.env.LOG_LEVEL || "info" });
@@ -74,21 +69,16 @@ const sessions = new Map();
 
 const ChatSchema = z.object({
   prompt: z.string().min(1),
-  task: z
-    .enum(["chat", "jobs", "subs", "weather", "sentiment", "resume", "news"])
-    .default("chat"),
+  task: z.enum(["chat", "jobs", "subs", "weather", "sentiment", "resume", "news"]).default("chat"),
   sid: z.string().min(3).default("default"),
 });
 const RespSchema = z.object({
   answer: z.string(),
-  next_action: z
-    .enum(["none", "added", "listed", "updated", "imported", "error"])
-    .default("none"),
+  next_action: z.enum(["none", "added", "listed", "updated", "imported", "error"]).default("none"),
   data: z.record(z.any()).default({}),
 });
 
-const SCANNER_BASE_URL =
-  process.env.SCANNER_BASE_URL?.trim() || "http://127.0.0.1:5057";
+const SCANNER_BASE_URL = process.env.SCANNER_BASE_URL?.trim() || "http://127.0.0.1:5057";
 
 function postScanner(pathname, body = {}) {
   return new Promise((resolve, reject) => {
@@ -108,12 +98,14 @@ function postScanner(pathname, body = {}) {
           try {
             resolve(JSON.parse(buf || "{}"));
           } catch (e) {
-            reject(e);
+            reject(new Error(`Failed to parse scanner response: ${e.message}`));
           }
         });
       }
     );
-    req.on("error", reject);
+    req.on("error", (err) => {
+      reject(new Error(`Scanner request failed: ${err.message}`));
+    });
     req.write(JSON.stringify(body));
     req.end();
   });
@@ -166,20 +158,14 @@ async function runNewsDigestExec({ email, python } = {}) {
 
 // ---- graph ---------------------------------------------------------------
 function makeGraph(task, sid) {
-  const { addJob, listJobs, updateJob, importJobsFromGmail } =
-    toolsJobs(langgraphToolFactory);
-  const {
-    addSubscription,
-    listSubscriptions,
-    updateSubscription,
-    importSubscriptionsFromGmail,
-  } = toolsSubs(langgraphToolFactory);
+  const { addJob, listJobs, updateJob, importJobsFromGmail } = toolsJobs(langgraphToolFactory);
+  const { addSubscription, listSubscriptions, updateSubscription, importSubscriptionsFromGmail } =
+    toolsSubs(langgraphToolFactory);
   const { getWeather } = toolsWeather(langgraphToolFactory);
   const { analyzeSentiment } = toolsSentiment(langgraphToolFactory);
-  const { resumeStatus, resumeAsk, resumeImprove } = toolsResume(
-    langgraphToolFactory,
-    () => ({ sid })
-  );
+  const { resumeStatus, resumeAsk, resumeImprove } = toolsResume(langgraphToolFactory, () => ({
+    sid,
+  }));
 
   const runNewsDigest = new DynamicStructuredTool({
     name: "runNewsDigest",
@@ -221,7 +207,9 @@ function makeGraph(task, sid) {
   graph.addNode("tool", async (state) => {
     const last = state.messages[state.messages.length - 1];
     const tc = last.tool_calls?.[0];
-    if (!tc) return { messages: [] };
+    if (!tc) {
+      return { messages: [] };
+    }
 
     const catalog = {
       addJob,
@@ -286,7 +274,11 @@ app.post("/chat", async (req, res, next) => {
       const prior = sessions.get(sid) || [];
       sessions.set(
         sid,
-        [...prior, { role: "user", content: prompt || "" }, { role: "assistant", content: text }].slice(-10)
+        [
+          ...prior,
+          { role: "user", content: prompt || "" },
+          { role: "assistant", content: text },
+        ].slice(-10)
       );
       return res.json({ answer: text, next_action: "none", data: {} });
     }
@@ -337,11 +329,10 @@ const upload = multer({
 app.post("/upload", upload.single("file"), async (req, res, next) => {
   try {
     const sid = (req.query.sid || req.body?.sid || "default").toString();
-    if (!req.file) return res.status(400).json({ ok: false, error: "No file" });
-    if (
-      !/pdf$/i.test(req.file.originalname) ||
-      req.file.mimetype !== "application/pdf"
-    ) {
+    if (!req.file) {
+      return res.status(400).json({ ok: false, error: "No file" });
+    }
+    if (!/pdf$/i.test(req.file.originalname) || req.file.mimetype !== "application/pdf") {
       return res.status(400).json({ ok: false, error: "Only PDF supported" });
     }
     const data = await pdf(req.file.buffer);
@@ -365,7 +356,7 @@ app.post("/news/run", async (req, res, next) => {
 });
 
 // ---- jobs import → CSV download -------------------------------------------
-app.post("/api/jobs/import_csv", async (req, res, next) => {
+app.post("/api/jobs/import_csv", async (req, res, _next) => {
   try {
     const daysBack = Number(req.body?.daysBack ?? 7);
     req.log?.info({ daysBack }, "import_csv start");

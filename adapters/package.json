@@ -8,7 +8,11 @@
   "scripts": {
     "dev:langgraph": "node server_langgraph.js",
     "dev:agentkit": "node server_agentkit.js",
-    "dev:all": "concurrently -k \"npm:dev:langgraph\" \"npm:dev:agentkit\""
+    "dev:all": "concurrently -k \"npm:dev:langgraph\" \"npm:dev:agentkit\"",
+    "lint": "eslint . --ext .js",
+    "lint:fix": "eslint . --ext .js --fix",
+    "format": "prettier --write \"**/*.js\"",
+    "format:check": "prettier --check \"**/*.js\""
   },
   "dependencies": {
     "@langchain/core": "^0.2.36",
@@ -29,6 +33,8 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
-    "concurrently": "^9.2.1"
+    "concurrently": "^9.2.1",
+    "eslint": "^8.57.0",
+    "prettier": "^3.2.5"
   }
 }
